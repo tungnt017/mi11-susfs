@@ -1,0 +1,112 @@
+name: Build lisa kernel (A13) + SukiSU + SUSFS (from new repo)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: "Kernel source repo URL"
+        required: true
+        default: "https://github.com/PixelExperience-Devices/kernel_xiaomi_lisa.git"
+      kernel_branch:
+        description: "Kernel branch/tag (để trống = default)"
+        required: false
+        default: ""
+      susfs_branch:
+        description: "SUSFS branch: main | test | version (vd: 1.5.7)"
+        required: true
+        default: "main"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      # Repo mới chỉ chứa workflow, vẫn checkout để có workspace
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison flex ccache build-essential \
+            libssl-dev libncurses5-dev libelf-dev \
+            python3 python3-pip git curl unzip \
+            rsync lz4 zstd \
+            dwarves libdw-dev
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-
+
+      # Clone kernel source (repo ngoài)
+      - name: Clone kernel source
+        run: |
+          set -e
+          echo "Cloning: ${{ github.event.inputs.kernel_repo }}"
+          git clone --depth=1 ${{ github.event.inputs.kernel_repo }} kernel
+          cd kernel
+          if [ -n "${{ github.event.inputs.kernel_branch }}" ]; then
+            echo "Checking out: ${{ github.event.inputs.kernel_branch }}"
+            git fetch --depth=1 origin ${{ github.event.inputs.kernel_branch }}
+            git checkout ${{ github.event.inputs.kernel_branch }}
+          fi
+          echo "Kernel HEAD:"
+          git log -1 --oneline
+
+      # Setup clang (PixelExperience/AOSP prebuilt)
+      - name: Setup Clang
+        run: |
+          git clone https://github.com/PixelExperience/prebuilts_clang_host_linux-x86 clang --depth=1
+          echo "${GITHUB_WORKSPACE}/clang/bin" >> $GITHUB_PATH
+          clang --version || true
+
+      # Integrate SukiSU-Ultra + SUSFS (experiment)
+      - name: Integrate SukiSU + SUSFS
+        run: |
+          cd kernel
+          echo "Integrating SUSFS branch: susfs-${{ github.event.inputs.susfs_branch }}"
+          curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh \
+            | bash -s susfs-${{ github.event.inputs.susfs_branch }}
+
+      # Build kernel using GKI config
+      - name: Build kernel (GKI)
+        run: |
+          cd kernel
+          # Repo kernel_xiaomi_lisa có build.config.gki (GKI build flow) 
+          source build.config.gki
+          export CC="ccache clang"
+          export CXX="ccache clang++"
+          ccache -M 5G
+          make -j"$(nproc)"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out-artifacts
+          # Các output thường gặp
+          if [ -f kernel/out/arch/arm64/boot/Image ]; then
+            cp -v kernel/out/arch/arm64/boot/Image out-artifacts/
+          fi
+          if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp -v kernel/out/arch/arm64/boot/Image.gz out-artifacts/
+          fi
+          if [ -f kernel/out/.config ]; then
+            cp -v kernel/out/.config out-artifacts/kernel.config
+          fi
+          ls -lah out-artifacts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lisa-a13-sukisu-susfs-${{ github.event.inputs.susfs_branch }}
+          path: out-artifacts
