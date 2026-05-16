@@ -1,0 +1,133 @@
+name: Build Xiaomi Lisa Kernel (non-GKI + SukiSU)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+
+    steps:
+      # 1. Checkout repo CI
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Setup environment
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git curl bc bison flex \
+            build-essential zip unzip \
+            libssl-dev libelf-dev \
+            python3 ccache
+
+      # 3. Clone kernel
+      - name: Clone kernel source
+        run: |
+          git clone https://github.com/PixelExperience-Devices/kernel_xiaomi_lisa.git kernel
+          cd kernel
+          git checkout thirteen || true
+
+      # 4. Download clang (Android prebuilts chuẩn)
+      - name: Setup clang
+        run: |
+          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang --depth=1
+          echo "CLANG_PATH=$PWD/clang" >> $GITHUB_ENV
+
+      # 5. Integrate SukiSU
+      - name: Integrate SukiSU (builtin)
+        run: |
+          cd kernel
+          curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
+
+      # 6. Apply manual hooks (non-GKI)
+      - name: Patch KernelSU hooks
+        run: |
+          cd kernel
+
+          # exec.c
+          sed -i '/__do_execve_file/a\
+#ifdef CONFIG_KSU\
+if (ksu_execveat_hook) {\
+    ksu_handle_execveat(&fd, &filename, argv, envp, &flags);\
+}\
+#endif' fs/exec.c
+
+          # open.c
+          sed -i '/do_faccessat/a\
+#ifdef CONFIG_KSU\
+ksu_handle_faccessat(&dfd, &filename, &mode, &flags);\
+#endif' fs/open.c
+
+          # read_write.c
+          sed -i '/vfs_read(/a\
+#ifdef CONFIG_KSU\
+ksu_handle_vfs_read(&file, &buf, &count, &pos);\
+#endif' fs/read_write.c
+
+          # stat.c
+          sed -i '/vfs_statx(/a\
+#ifdef CONFIG_KSU\
+ksu_handle_stat(&dfd, &filename, &flags);\
+#endif' fs/stat.c
+
+      # 7. Enable configs
+      - name: Enable configs
+        run: |
+          cd kernel
+
+          DEF=$(ls arch/arm64/configs/*lisa*defconfig | head -n1)
+
+          echo "Using defconfig: $DEF"
+
+          echo "CONFIG_KSU=y" >> $DEF
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> $DEF
+          echo "CONFIG_KALLSYMS=y" >> $DEF
+          echo "CONFIG_KALLSYMS_ALL=y" >> $DEF
+
+      # 8. Build kernel
+      - name: Build kernel
+        run: |
+          cd kernel
+
+          export PATH=$CLANG_PATH:$PATH
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+
+          DEF=$(ls arch/arm64/configs/*lisa*defconfig | head -n1)
+
+          make O=out ARCH=arm64 $DEF
+
+          make -j$(nproc) \
+            O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1
+
+      # 9. Package output
+      - name: Package result
+        run: |
+          cd kernel
+          mkdir -p output
+
+          cp out/arch/arm64/boot/Image output/ || true
+          cp out/arch/arm64/boot/Image.gz output/ || true
+          cp out/arch/arm64/boot/dtb output/ || true
+          cp out/arch/arm64/boot/dtbo.img output/ || true
+
+      # 10. Upload artifact
+      - name: Upload kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: lisa-kernel
+          path: kernel/output
