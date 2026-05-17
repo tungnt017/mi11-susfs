@@ -1,15 +1,21 @@
-# ============================================================
-#  SukiSU-Ultra Non-GKI Kernel Builder — Xiaomi Lisa (SM8350)
-#  Device : Xiaomi 11 Lite 5G NE / Mi 11 LE
-#  Chipset: Snapdragon 888 (lahaina), Linux 5.4, non-GKI
-# ============================================================
-name: Build SukiSU-Ultra Kernel (Lisa)
+# =================================================================
+#  SukiSU-Ultra Non-GKI Kernel Builder
+#  Kernel : PixelExperience-Devices/kernel_xiaomi_lisa (branch: thirteen)
+#  Device : Xiaomi 11 Lite NE 5G / Mi 11 LE (lisa)
+#  SoC    : Snapdragon 888 (lahaina), Linux 5.4, non-GKI
+# =================================================================
+name: Build SukiSU-Ultra Kernel — Lisa (PixelExperience)
 
 on:
   workflow_dispatch:
     inputs:
+      KERNEL_BRANCH:
+        description: "Kernel source branch"
+        required: true
+        default: "thirteen"
+
       SUKISU_BRANCH:
-        description: "SukiSU-Ultra branch (susfs-main / susfs-test / main / builtin)"
+        description: "SukiSU-Ultra branch"
         required: true
         default: "susfs-main"
         type: choice
@@ -19,10 +25,21 @@ on:
           - main
           - builtin
 
-      KERNEL_BRANCH:
-        description: "Kernel source branch"
+      CLANG_VERSION:
+        description: "AOSP Clang version (r416183b = Clang 12, r450784d = Clang 14)"
         required: true
-        default: "KernelSU"
+        default: "r416183b"
+        type: choice
+        options:
+          - r383902
+          - r416183b
+          - r450784d
+          - r487747c
+
+      ANYKERNEL_REPO:
+        description: "AnyKernel3 repo URL"
+        required: true
+        default: "https://github.com/osm0sis/AnyKernel3"
 
       ANYKERNEL_BRANCH:
         description: "AnyKernel3 branch"
@@ -30,196 +47,201 @@ on:
         default: "master"
 
       CREATE_RELEASE:
-        description: "Upload as GitHub Release?"
+        description: "Tạo GitHub Release sau khi build?"
         required: true
         default: true
         type: boolean
 
-      USE_PROTON_CLANG:
-        description: "Use Proton-Clang (faster)? Otherwise uses AOSP Clang"
-        required: true
-        default: true
-        type: boolean
-
-# ── Toàn bộ biến config ở đây, chỉnh sửa cho phù hợp ───────
+# ── Cấu hình cố định cho lisa/lahaina ──────────────────────────
 env:
-  # ── Kernel source ────────────────────────────────────────
-  KERNEL_REPO:    "https://github.com/likkai/ksu_kernel_xiaomi_lisa"
-  KERNEL_BRANCH:  ${{ github.event.inputs.KERNEL_BRANCH }}
-
-  # ── Defconfig ────────────────────────────────────────────
-  # lahaina non-GKI dùng vendor/lahaina-qgki_defconfig + lisa fragment
-  DEFCONFIG:      "vendor/lahaina-qgki_defconfig"
-  # Nếu kernel dùng merge_config thì thêm fragment ở bước build
-
-  # ── Kernel image ─────────────────────────────────────────
-  ARCH:           "arm64"
-  KERNEL_IMAGE:   "Image"               # hoặc Image.gz-dtb
-
-  # ── AnyKernel3 ───────────────────────────────────────────
-  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3"
-  ANYKERNEL_BRANCH: ${{ github.event.inputs.ANYKERNEL_BRANCH }}
-
-  # ── Toolchain ────────────────────────────────────────────
-  PROTON_CLANG_REPO:  "https://github.com/kdrag0n/proton-clang"
-  PROTON_CLANG_BRANCH: "master"
-  AOSP_CLANG_VERSION:  "r416183b"       # Clang 12 — tốt cho 5.4
-
-  # ── GCC (dùng kèm với bất kỳ clang nào) ─────────────────
-  GCC_ARM64_VERSION: "aarch64-linux-android-4.9"
-  GCC_ARM32_VERSION: "arm-linux-androideabi-4.9"
-  AOSP_GCC_ANDROID_VERSION: "12.1.0"
-  AOSP_GCC_RELEASE: "r27"
+  KERNEL_REPO:   "https://github.com/PixelExperience-Devices/kernel_xiaomi_lisa"
+  ARCH:          "arm64"
+  DEFCONFIG:     "vendor/lahaina-qgki_defconfig"
+  KERNEL_IMAGE:  "Image"
+  # GCC 4.9 arm64 + arm32 (AOSP android-12.1.0_r27)
+  GCC_ANDROID_VER: "12.1.0"
+  GCC_RELEASE:     "r27"
 
 jobs:
   build:
-    name: 🔨 Build SukiSU-Ultra (Lisa)
+    name: "🔨 SukiSU-Ultra | ${{ github.event.inputs.SUKISU_BRANCH }} | lisa"
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
-      # ────────────────────────────────────────────────────
-      - name: 📋 Print build config
+      # ── 0. Print info ────────────────────────────────────────
+      - name: 📋 Build info
         run: |
-          echo "================================================"
-          echo " SukiSU-Ultra Non-GKI Build — Xiaomi Lisa"
-          echo "================================================"
-          echo "Kernel repo   : ${{ env.KERNEL_REPO }}"
-          echo "Kernel branch : ${{ env.KERNEL_BRANCH }}"
-          echo "SukiSU branch : ${{ github.event.inputs.SUKISU_BRANCH }}"
-          echo "Defconfig     : ${{ env.DEFCONFIG }}"
-          echo "Create release: ${{ github.event.inputs.CREATE_RELEASE }}"
-          echo "================================================"
+          echo "======================================================"
+          echo " Kernel : PixelExperience-Devices/kernel_xiaomi_lisa"
+          echo " Branch : ${{ github.event.inputs.KERNEL_BRANCH }}"
+          echo " SukiSU : ${{ github.event.inputs.SUKISU_BRANCH }}"
+          echo " Clang  : ${{ github.event.inputs.CLANG_VERSION }}"
+          echo " Device : Xiaomi 11 Lite NE 5G / Mi 11 LE (lisa)"
+          echo "======================================================"
+          echo "BUILD_DATE=$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
 
-      # ────────────────────────────────────────────────────
+      # ── 1. Free disk space ───────────────────────────────────
       - name: 🧹 Free disk space
         run: |
-          sudo apt-get clean
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean -y
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY"
           df -h
 
-      # ────────────────────────────────────────────────────
+      # ── 2. Install dependencies ──────────────────────────────
       - name: 📦 Install build dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex \
+            adb autoconf automake axel bc binutils bison \
+            build-essential ca-certificates cpio curl flex \
             g++-multilib gcc-multilib git gnupg gperf \
-            imagemagick lib32ncurses5-dev lib32readline-dev \
-            lib32z1-dev liblz4-tool libncurses5 libncurses5-dev \
-            libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
-            lzop pngcrush rsync schedtool squashfs-tools \
-            xsltproc zip zlib1g-dev python3 python2 \
-            libelf-dev libdw-dev cpio
+            htop imagemagick lib32ncurses5-dev lib32readline-dev \
+            lib32z1-dev libelf-dev libdw-dev libffi-dev \
+            libgmp-dev liblz4-tool libmpc-dev libmpfr-dev \
+            libncurses5 libncurses5-dev libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush \
+            python3 python3-pip rsync schedtool squashfs-tools \
+            xsltproc zip zlib1g-dev
 
-      # ────────────────────────────────────────────────────
-      - name: ⏰ Record build start time
-        id: builddate
-        run: echo "DATE=$(date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
-
-      # ────────────────────────────────────────────────────
+      # ── 3. Clone kernel source ───────────────────────────────
       - name: 🌲 Clone kernel source
         run: |
+          echo "Cloning ${{ env.KERNEL_REPO }} @ ${{ github.event.inputs.KERNEL_BRANCH }}"
           git clone --depth=1 \
-            --branch "${{ env.KERNEL_BRANCH }}" \
+            --branch "${{ github.event.inputs.KERNEL_BRANCH }}" \
             "${{ env.KERNEL_REPO }}" \
             kernel_source
-          echo "Kernel cloned ✅"
+          cd kernel_source
+          echo "KERNEL_VERSION=$(make kernelversion 2>/dev/null | head -1)" >> $GITHUB_ENV
+          echo "Kernel version: $(make kernelversion 2>/dev/null | head -1)"
 
-      # ────────────────────────────────────────────────────
-      - name: 🔧 Setup SukiSU-Ultra (non-GKI builtin + susfs)
+      # ── 4. Integrate SukiSU-Ultra ────────────────────────────
+      - name: 🌸 Integrate SukiSU-Ultra
         working-directory: kernel_source
         run: |
-          BRANCH="${{ github.event.inputs.SUKISU_BRANCH }}"
-          echo "Integrating SukiSU-Ultra branch: $BRANCH"
+          SUKISU="${{ github.event.inputs.SUKISU_BRANCH }}"
+          echo "→ Integrating SukiSU-Ultra branch: ${SUKISU}"
+
           curl -LSs \
             "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" \
-            | bash -s "$BRANCH"
-          echo "SukiSU-Ultra integrated ✅"
+            | bash -s "${SUKISU}"
 
-      # ────────────────────────────────────────────────────
-      - name: 🛠️ Setup Proton-Clang toolchain
-        if: ${{ github.event.inputs.USE_PROTON_CLANG == 'true' }}
-        run: |
-          mkdir -p toolchain/proton-clang
-          git clone --depth=1 \
-            --branch "${{ env.PROTON_CLANG_BRANCH }}" \
-            "${{ env.PROTON_CLANG_REPO }}" \
-            toolchain/proton-clang
-          echo "Proton-Clang installed ✅"
-          echo "CLANG_DIR=$(pwd)/toolchain/proton-clang/bin" >> $GITHUB_ENV
+          # Verifikasi integrasi berhasil
+          if [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ] || \
+             grep -r "kernelsu" security/ --include="*.c" -l 2>/dev/null | head -1; then
+            echo "✅ SukiSU-Ultra integrated successfully"
+          else
+            echo "⚠️  Could not verify integration — proceeding anyway"
+          fi
 
-      - name: 🛠️ Setup AOSP Clang toolchain
-        if: ${{ github.event.inputs.USE_PROTON_CLANG == 'false' }}
+      # ── 5. Setup AOSP Clang ──────────────────────────────────
+      - name: 🛠️ Setup AOSP Clang
         run: |
-          mkdir -p toolchain/aosp-clang
-          CLANG_VER="${{ env.AOSP_CLANG_VERSION }}"
-          wget -q \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${CLANG_VER}.tar.gz" \
+          CLANG_VER="${{ github.event.inputs.CLANG_VERSION }}"
+          CLANG_DIR="$(pwd)/toolchain/clang"
+          mkdir -p "${CLANG_DIR}"
+
+          echo "Downloading AOSP Clang ${CLANG_VER}..."
+          # Thử từ mirror nhanh hơn trước
+          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${CLANG_VER}.tar.gz"
+
+          # Dùng wget với retry
+          wget -q --tries=3 --timeout=60 \
+            "https://github.com/ZyCromerZ/Clang/releases/download/${CLANG_VER}-release/Clang-${CLANG_VER}.tar.gz" \
+            -O clang.tar.gz 2>/dev/null || \
+          wget -q --tries=3 --timeout=120 \
+            "${CLANG_URL}" \
             -O clang.tar.gz || \
-          wget -q \
-            "https://github.com/llvm/llvm-project/releases/download/llvmorg-12.0.0/clang+llvm-12.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz" \
-            -O clang.tar.gz
-          tar -xf clang.tar.gz -C toolchain/aosp-clang --strip-components=1
-          echo "AOSP Clang installed ✅"
-          echo "CLANG_DIR=$(pwd)/toolchain/aosp-clang/bin" >> $GITHUB_ENV
+          {
+            echo "⚠️ Falling back to llvm-project release..."
+            # Fallback: proton-clang (selalu tersedia)
+            git clone --depth=1 \
+              https://github.com/kdrag0n/proton-clang \
+              "${CLANG_DIR}"
+            echo "CLANG_DIR=${CLANG_DIR}/bin" >> $GITHUB_ENV
+            echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+            exit 0
+          }
 
-      # ────────────────────────────────────────────────────
-      - name: 🛠️ Setup AOSP GCC (arm64 + arm32)
+          tar -xf clang.tar.gz -C "${CLANG_DIR}" --strip-components=0 2>/dev/null || \
+          tar -xf clang.tar.gz -C "${CLANG_DIR}"
+
+          rm -f clang.tar.gz
+
+          # Temukan bin dir
+          if [ -d "${CLANG_DIR}/bin" ]; then
+            CLANG_BIN="${CLANG_DIR}/bin"
+          else
+            CLANG_BIN="${CLANG_DIR}/$(ls ${CLANG_DIR} | head -1)/bin"
+          fi
+
+          echo "CLANG_DIR=${CLANG_BIN}" >> $GITHUB_ENV
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          "${CLANG_BIN}/clang" --version | head -1
+          echo "✅ Clang ready"
+
+      - name: 🛠️ Setup GCC arm64
         run: |
-          mkdir -p toolchain/gcc/arm64 toolchain/gcc/arm32
-          BASE="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86"
-          GCC_ANDROID="${{ env.AOSP_GCC_ANDROID_VERSION }}"
-          GCC_REL="${{ env.AOSP_GCC_RELEASE }}"
-
-          # arm64
-          wget -q \
-            "${BASE}/aarch64/${{ env.GCC_ARM64_VERSION }}/+archive/refs/tags/android-${GCC_ANDROID}_${GCC_REL}.tar.gz" \
-            -O gcc64.tar.gz 2>/dev/null || \
+          mkdir -p toolchain/gcc/arm64
+          echo "Cloning GCC arm64 (aarch64-linux-android-4.9)..."
           git clone --depth=1 \
-            "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/${{ env.GCC_ARM64_VERSION }}" \
+            "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9" \
             toolchain/gcc/arm64
-
-          # arm32
-          git clone --depth=1 \
-            "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/${{ env.GCC_ARM32_VERSION }}" \
-            toolchain/gcc/arm32
-
-          echo "GCC installed ✅"
           echo "GCC64_DIR=$(pwd)/toolchain/gcc/arm64/bin" >> $GITHUB_ENV
-          echo "GCC32_DIR=$(pwd)/toolchain/gcc/arm32/bin" >> $GITHUB_ENV
+          echo "✅ GCC arm64 ready"
 
-      # ────────────────────────────────────────────────────
-      - name: ⚙️ Configure kernel (defconfig)
+      - name: 🛠️ Setup GCC arm32
+        run: |
+          mkdir -p toolchain/gcc/arm32
+          echo "Cloning GCC arm32 (arm-linux-androideabi-4.9)..."
+          git clone --depth=1 \
+            "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9" \
+            toolchain/gcc/arm32
+          echo "GCC32_DIR=$(pwd)/toolchain/gcc/arm32/bin" >> $GITHUB_ENV
+          echo "✅ GCC arm32 ready"
+
+      # ── 6. Configure kernel ──────────────────────────────────
+      - name: ⚙️ Generate defconfig
         working-directory: kernel_source
         run: |
           mkdir -p out
-          CROSS="$GCC64_DIR/aarch64-linux-android-"
-          CROSS32="$GCC32_DIR/arm-linux-androideabi-"
-          CC="$CLANG_DIR/clang"
-
-          make O=out \
+          make -j$(nproc) O=out \
             ARCH=${{ env.ARCH }} \
-            CC="$CC" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE="$CROSS" \
-            CROSS_COMPILE_ARM32="$CROSS32" \
+            CC="${{ env.CLANG_DIR }}/clang" \
+            CLANG_TRIPLE="${{ env.CLANG_TRIPLE }}" \
+            CROSS_COMPILE="${{ env.GCC64_DIR }}/aarch64-linux-android-" \
+            CROSS_COMPILE_ARM32="${{ env.GCC32_DIR }}/arm-linux-androideabi-" \
             ${{ env.DEFCONFIG }}
+          echo "✅ Defconfig done"
 
-          echo "Defconfig applied ✅"
-
-      # ────────────────────────────────────────────────────
-      - name: 🔩 Enable SukiSU-Ultra config flags
+      # ── 7. Patch KConfig flags ───────────────────────────────
+      - name: 🔩 Apply SukiSU-Ultra Kconfig
         working-directory: kernel_source
         run: |
-          # Non-GKI builtin hook — cần CONFIG_KSU_MANUAL_HOOK=y
-          ./scripts/config --file out/.config \
+          CFG="out/.config"
+
+          set_config() {
+            ./scripts/config --file "$CFG" "$@"
+          }
+
+          echo "→ Enabling KSU core flags (non-GKI manual hook)..."
+          set_config \
             -e CONFIG_KSU \
             -e CONFIG_KSU_MANUAL_HOOK \
-            -d CONFIG_KSU_TRACEPOINT_HOOK
+            -d CONFIG_KSU_TRACEPOINT_HOOK \
+            -d CONFIG_KSU_DEBUG
 
-          # SuSFS (nếu dùng susfs branch)
-          if echo "${{ github.event.inputs.SUKISU_BRANCH }}" | grep -q "susfs"; then
-            ./scripts/config --file out/.config \
+          BRANCH="${{ github.event.inputs.SUKISU_BRANCH }}"
+          if echo "${BRANCH}" | grep -q "susfs"; then
+            echo "→ Enabling SuSFS flags..."
+            set_config \
               -e CONFIG_KSU_SUSFS \
               -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
               -e CONFIG_KSU_SUSFS_SUS_PATH \
@@ -231,125 +253,149 @@ jobs:
               -e CONFIG_KSU_SUSFS_ENABLE_LOG \
               -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
               -e CONFIG_KSU_SUSFS_SUS_SU
-            echo "SuSFS config enabled ✅"
+            echo "✅ SuSFS flags enabled"
           fi
 
-          # Regenerate config
+          # Regenerate để resolve dependencies
           make O=out ARCH=${{ env.ARCH }} olddefconfig
-          echo "Config finalized ✅"
+          echo "✅ Kconfig applied & regenerated"
 
-      # ────────────────────────────────────────────────────
+          # Tampilkan KSU config hasil akhir
+          echo "--- KSU config summary ---"
+          grep -E "^CONFIG_KSU" out/.config || echo "(none found)"
+
+      # ── 8. Build kernel ──────────────────────────────────────
       - name: 🚀 Build kernel
         working-directory: kernel_source
         run: |
-          CROSS="$GCC64_DIR/aarch64-linux-android-"
-          CROSS32="$GCC32_DIR/arm-linux-androideabi-"
-          CC="$CLANG_DIR/clang"
           JOBS=$(nproc --all)
+          CC="${{ env.CLANG_DIR }}/clang"
+          CROSS="${{ env.GCC64_DIR }}/aarch64-linux-android-"
+          CROSS32="${{ env.GCC32_DIR }}/arm-linux-androideabi-"
 
-          echo "Building with $JOBS jobs..."
+          echo "Building with ${JOBS} jobs..."
+          echo "CC      : ${CC}"
+          echo "CROSS   : ${CROSS}"
+          echo "CROSS32 : ${CROSS32}"
 
-          make -j"$JOBS" O=out \
+          make -j"${JOBS}" O=out \
             ARCH=${{ env.ARCH }} \
-            CC="$CC" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE="$CROSS" \
-            CROSS_COMPILE_ARM32="$CROSS32" \
-            LD="$CLANG_DIR/ld.lld" \
-            AR="$CLANG_DIR/llvm-ar" \
-            NM="$CLANG_DIR/llvm-nm" \
-            OBJCOPY="$CLANG_DIR/llvm-objcopy" \
-            OBJDUMP="$CLANG_DIR/llvm-objdump" \
-            STRIP="$CLANG_DIR/llvm-strip" \
+            CC="${CC}" \
+            CLANG_TRIPLE="${{ env.CLANG_TRIPLE }}" \
+            CROSS_COMPILE="${CROSS}" \
+            CROSS_COMPILE_ARM32="${CROSS32}" \
+            LD="${{ env.CLANG_DIR }}/ld.lld" \
+            AR="${{ env.CLANG_DIR }}/llvm-ar" \
+            NM="${{ env.CLANG_DIR }}/llvm-nm" \
+            OBJCOPY="${{ env.CLANG_DIR }}/llvm-objcopy" \
+            OBJDUMP="${{ env.CLANG_DIR }}/llvm-objdump" \
+            STRIP="${{ env.CLANG_DIR }}/llvm-strip" \
             2>&1 | tee ../build.log
 
-          # Kiểm tra image tồn tại
-          if [ ! -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE }}" ]; then
-            echo "❌ Kernel image NOT found! Build failed."
+          IMAGE="out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE }}"
+          if [ ! -f "${IMAGE}" ]; then
+            echo "❌ Build FAILED — kernel image not found"
+            tail -50 ../build.log
             exit 1
           fi
-          echo "✅ Kernel image built: out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE }}"
 
-      # ────────────────────────────────────────────────────
+          SIZE=$(du -sh "${IMAGE}" | cut -f1)
+          echo "✅ Kernel image built: ${IMAGE} (${SIZE})"
+          echo "KERNEL_IMAGE_PATH=${IMAGE}" >> $GITHUB_ENV
+
+      # ── 9. AnyKernel3 packaging ──────────────────────────────
       - name: 📦 Package with AnyKernel3
         run: |
+          echo "Cloning AnyKernel3..."
           git clone --depth=1 \
-            --branch "${{ env.ANYKERNEL_BRANCH }}" \
-            "${{ env.ANYKERNEL_REPO }}" \
+            --branch "${{ github.event.inputs.ANYKERNEL_BRANCH }}" \
+            "${{ github.event.inputs.ANYKERNEL_REPO }}" \
             AnyKernel3
 
-          # Copy kernel image
-          cp kernel_source/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE }} \
-             AnyKernel3/
+          # Copy kernel artifacts
+          cp kernel_source/${{ env.KERNEL_IMAGE_PATH }} AnyKernel3/ 2>/dev/null || \
+          cp kernel_source/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE }} AnyKernel3/
 
-          # Copy dtb/dtbo nếu tồn tại
-          [ -f kernel_source/out/arch/${{ env.ARCH }}/boot/dtb.img ] && \
-            cp kernel_source/out/arch/${{ env.ARCH }}/boot/dtb.img AnyKernel3/ || true
-          [ -f kernel_source/out/arch/${{ env.ARCH }}/boot/dtbo.img ] && \
-            cp kernel_source/out/arch/${{ env.ARCH }}/boot/dtbo.img AnyKernel3/ || true
+          # Copy DTB jika ada
+          for f in dtb.img dtbo.img; do
+            SRC="kernel_source/out/arch/${{ env.ARCH }}/boot/${f}"
+            [ -f "${SRC}" ] && cp "${SRC}" AnyKernel3/ && echo "Copied ${f}" || true
+          done
 
-          # Chỉnh anykernel.sh cho lisa
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh || true
+          # Patch anykernel.sh — nonaktifkan device check untuk fleksibilitas
+          if [ -f AnyKernel3/anykernel.sh ]; then
+            sed -i 's/do\.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+            # Tambah keterangan device
+            sed -i "s/device\.name1=.*/device.name1=lisa/" AnyKernel3/anykernel.sh || true
+          fi
 
-          # Tạo zip
-          DATE="${{ steps.builddate.outputs.DATE }}"
-          BRANCH="${{ github.event.inputs.SUKISU_BRANCH }}"
-          ZIP_NAME="SukiSU-Ultra_lisa_${BRANCH}_${DATE}.zip"
+          # Buat ZIP
+          SUKISU="${{ github.event.inputs.SUKISU_BRANCH }}"
+          BRANCH="${{ github.event.inputs.KERNEL_BRANCH }}"
+          DATE="${{ env.BUILD_DATE }}"
+          ZIP_NAME="SukiSU-Ultra_lisa_PE_${BRANCH}_${SUKISU}_${DATE}.zip"
 
           cd AnyKernel3
-          zip -r9 "../${ZIP_NAME}" . -x "*.git*" README.md "*.placeholder"
+          zip -r9 "../${ZIP_NAME}" . \
+            --exclude "*.git*" \
+            --exclude "README.md" \
+            --exclude "*.placeholder"
           cd ..
 
           echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
-          echo "✅ Package created: ${ZIP_NAME}"
+          echo "✅ Package: ${ZIP_NAME} ($(du -sh ${ZIP_NAME} | cut -f1))"
 
-      # ────────────────────────────────────────────────────
-      - name: 📤 Upload AnyKernel3 zip (artifact)
+      # ── 10. Upload artifacts ─────────────────────────────────
+      - name: 📤 Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
+          compression-level: 0
           retention-days: 7
 
-      - name: 📤 Upload build log (artifact)
+      - name: 📤 Upload build log
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: build-log-${{ steps.builddate.outputs.DATE }}
+          name: build-log-${{ env.BUILD_DATE }}
           path: build.log
           retention-days: 3
 
-      # ────────────────────────────────────────────────────
+      # ── 11. GitHub Release ───────────────────────────────────
       - name: 🏷️ Create GitHub Release
-        if: ${{ github.event.inputs.CREATE_RELEASE == 'true' }}
+        if: ${{ github.event.inputs.CREATE_RELEASE == 'true' && success() }}
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: "sukisu-${{ steps.builddate.outputs.DATE }}"
-          name: "SukiSU-Ultra Lisa | ${{ github.event.inputs.SUKISU_BRANCH }} | ${{ steps.builddate.outputs.DATE }}"
+          tag_name: "sukisu-pe-${{ env.BUILD_DATE }}"
+          name: "SukiSU-Ultra Lisa (PE) | ${{ github.event.inputs.SUKISU_BRANCH }} | ${{ env.BUILD_DATE }}"
           body: |
-            ## 🌸 SukiSU-Ultra Non-GKI Kernel — Xiaomi Lisa (SM8350)
+            ## 🌸 SukiSU-Ultra Non-GKI Kernel — Xiaomi Lisa
 
-            | Item | Value |
-            |------|-------|
-            | Device | Xiaomi 11 Lite 5G NE / Mi 11 LE (lisa) |
-            | Chipset | Snapdragon 888 (lahaina) |
-            | Kernel | Linux 5.4 non-GKI |
-            | SukiSU branch | `${{ github.event.inputs.SUKISU_BRANCH }}` |
-            | Kernel branch | `${{ github.event.inputs.KERNEL_BRANCH }}` |
-            | Build date | `${{ steps.builddate.outputs.DATE }}` |
+            | | |
+            |---|---|
+            | **Device** | Xiaomi 11 Lite NE 5G / Mi 11 LE (lisa) |
+            | **SoC** | Snapdragon 888 — lahaina, Linux 5.4 non-GKI |
+            | **Kernel source** | [PixelExperience-Devices/kernel_xiaomi_lisa](https://github.com/PixelExperience-Devices/kernel_xiaomi_lisa) |
+            | **Kernel branch** | `${{ github.event.inputs.KERNEL_BRANCH }}` |
+            | **Kernel version** | `${{ env.KERNEL_VERSION }}` |
+            | **SukiSU branch** | `${{ github.event.inputs.SUKISU_BRANCH }}` |
+            | **Clang** | `${{ github.event.inputs.CLANG_VERSION }}` |
+            | **Build date** | `${{ env.BUILD_DATE }}` |
+            | **Hook method** | Manual hook (non-GKI builtin) |
 
-            ### ⚡ Flash Instructions
-            1. Boot into custom recovery (TWRP / OrangeFox)
-            2. Flash the `.zip` file
-            3. Reboot system
-            4. Install **SukiSU-Ultra Manager** APK
+            ### ⚡ Hướng dẫn flash
+            1. Boot vào custom recovery (TWRP / OrangeFox)
+            2. Flash file `.zip`
+            3. Reboot hệ thống
+            4. Cài **SukiSU-Ultra Manager** APK
 
-            ### ⚠️ Warning
-            - Đảm bảo bootloader đã unlock
+            ### ⚠️ Lưu ý
+            - Yêu cầu **bootloader đã unlock**
             - Backup trước khi flash
-            - Build này dành cho **non-GKI** với **manual hook**
+            - Sau khi flash, cài SukiSU Manager từ [Releases](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           files: ${{ env.ZIP_NAME }}
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
